@@ -1,0 +1,166 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy import stats
+from matplotlib.ticker import FuncFormatter
+import matplotlib.ticker as mticker
+# Constants
+beta = 60
+t = 5.0  # True value for known data
+mean = 5.0
+std_devs = [1, 10, 100]  # Standard deviations for three user types
+error_threshold = 0.0001
+
+
+
+
+def generate_data(mean, std_devs, m, k):
+    """Generate random data for given parameters."""
+    m_per_type = m // len(std_devs)  # Number of users per type
+    datas = [np.random.normal(mean, (1/std_dev)**0.5, (m_per_type, k)) for std_dev in std_devs]
+    #datas = np.round([np.random.normal(mean, (1/std_dev)**0.5, (m_per_type, k)) for std_dev in std_devs], 9)
+    return np.concatenate(datas, axis=0)  # Concatenate along the user axis
+
+def compute_new_values(data, known_data, t, user_qualities, beta):
+    """Compute new values for tasks and user qualities."""
+    if np.sum(user_qualities) == 0:
+        user_qualities += 1e-10  # Add a small value to avoid division by zero
+
+    # Ensure that the shapes are compatible for multiplication
+    estimated_task_values = np.sum(data * user_qualities[:, np.newaxis], axis=0) / np.sum(user_qualities)
+
+    diff_unknown = data - estimated_task_values
+    diff_known = known_data - t
+    new_user_qualities = ((np.sum(diff_unknown ** 2, axis=1) + np.sum(diff_known ** 2, axis=1)) / beta)
+
+    # Avoid division by zero
+    new_user_qualities = np.clip(new_user_qualities, 1e-10, None)  # Replace zeros with a small value
+    new_user_qualities = 1 / new_user_qualities
+    return estimated_task_values, new_user_qualities
+
+
+def LFC_N(data, known_data, m):
+    task_values = np.ones(k)  # Initialize task values to 1
+    user_qualities = np.ones(m)  # Initialize user qualities to 1
+
+    while True:
+        new_task_values, new_user_qualities = compute_new_values(data, known_data, t, user_qualities, beta)
+
+        # Compute errors
+        task_values_error = np.sum(new_task_values - task_values)**2
+
+        # Update user_qualities and task_values
+        user_qualities = new_user_qualities
+        task_values = new_task_values
+
+        # Check for stopping condition
+        if  task_values_error < error_threshold:
+            break
+
+    return np.mean((task_values - t)**2)
+
+def weighted_average(data):
+    """Computes the weighted average of the data using the inverse of the variance as weights."""
+    variances = np.var(data, axis=1)
+    weights = 1 / (variances + 1e-10)  # Add a small constant to avoid division by zero
+    means = np.mean(data, axis=1)
+    weighted_mean = np.average(means, weights=weights)
+    return weighted_mean
+
+ms = [6, 9, 12, 15, 18, 21, 24, 27, 30]
+known_values = [0, 5, 10, 15, 20]
+
+line_width = 3
+label_font_size = 15
+legend_font_size = 9
+tick_font_size = 15
+marker_size = 6
+plt.figure(figsize=(4, 2.8))
+
+# Loop through known values and 'ms' for LFC_N method
+for k_known in known_values:
+    k = beta - k_known
+    average_errors = []
+    for m in ms:
+        errors = []
+        for _ in range(100):
+            data = generate_data(mean, std_devs, m, k)
+            known_data = generate_data(t, std_devs, m, k_known)
+            error = LFC_N(data, known_data, m)
+            errors.append(error)
+        average_errors.append(np.mean(errors))
+    plt.plot(ms, average_errors, marker='o', linestyle='-', label=f'LFC_N, k_known={k_known}', linewidth=line_width, markersize=marker_size)
+
+
+# Compute errors for weighted_average, simple_average, and mode
+weighted_average_errors = []
+simple_average_errors = []
+mode_errors = []
+for m in ms:
+    errors_weighted = []
+    errors_simple = []
+    errors_mode = []
+    for _ in range(100):
+        data = generate_data(mean, std_devs, m, 30)
+
+        # Weighted average
+        weighted_mean = weighted_average(data)
+        errors_weighted.append((weighted_mean - mean)**2)
+
+        # Simple average
+        simple_mean = np.mean(data)
+        errors_simple.append((simple_mean - mean)**2)
+
+        # Mode
+        flattened_data = data.flatten()
+        mode = stats.mode(flattened_data).mode
+        errors_mode.append((mode - mean)**2)
+
+    weighted_average_errors.append(np.mean(errors_weighted))
+    simple_average_errors.append(np.mean(errors_simple))
+    mode_errors.append(np.mean(errors_mode))
+
+# Plotting the errors for additional methods
+plt.plot(ms, weighted_average_errors, marker='x', linestyle='--', label='Weighted Average', linewidth=line_width, color='red', markersize=marker_size)
+plt.plot(ms, simple_average_errors, marker='s', linestyle='-.', label='Simple Average', linewidth=line_width, markersize=marker_size)
+#plt.plot(ms, mode_errors, marker='v', linestyle=':', label='Mode')
+
+plt.xlabel('Number of Workers', fontsize=label_font_size)
+plt.ylabel('Average Error', fontsize=label_font_size)
+plt.xticks(fontsize=tick_font_size)
+plt.yticks(fontsize=tick_font_size)
+plt.legend(fontsize=legend_font_size)
+# 应用 ScalarFormatter 到 y 轴
+def custom_formatter(value, pos):
+    return "{:.1f}".format(value*1000)
+formatter = mticker.FuncFormatter(custom_formatter)
+plt.gca().yaxis.set_major_formatter(formatter)
+
+# 启用科学记数法并设置显示指数的条件
+plt.ylabel('Average Error', fontsize=label_font_size)
+plt.gca().annotate('$\\times10^{-3}$', xy=(0.05, 1.05), xycoords='axes fraction',
+                   fontsize=10, ha='left', va='center')
+
+# 保存第一张图
+plt.savefig('/content/drive/MyDrive/实验图/图2a.pdf', format='pdf', dpi=300, bbox_inches='tight')
+plt.show()
+
+# 绘制第二张图 - 只展示“Weighted Average”方法
+plt.figure(figsize=(4, 2.8))
+plt.plot(ms, weighted_average_errors, marker='x', linestyle='--', label='Weighted Average', linewidth=line_width, color='red', markersize=marker_size)
+plt.xlabel('Number of Workers', fontsize=label_font_size)
+plt.ylabel('Average Error', fontsize=label_font_size)
+plt.xticks(fontsize=tick_font_size)
+plt.yticks(fontsize=tick_font_size)
+plt.legend(fontsize=legend_font_size)
+def custom_formatter(value, pos):
+    return "{:.1f}".format(value*10000)
+formatter = mticker.FuncFormatter(custom_formatter)
+plt.gca().yaxis.set_major_formatter(formatter)
+
+
+plt.gca().annotate('$\\times10^{-4}$', xy=(0.05, 1.05), xycoords='axes fraction',
+                   fontsize=10, ha='left', va='center')
+
+
+plt.savefig('/content/drive/MyDrive/实验图/图2b.pdf', format='pdf', dpi=300, bbox_inches='tight')
+plt.show()
